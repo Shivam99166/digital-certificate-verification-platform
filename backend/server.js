@@ -34,15 +34,18 @@ const allowedOrigins = rawAllowedOrigins
   .map((url) => url.trim().replace(/\/$/, ""))
   .filter(Boolean);
 
+const isAllowedOrigin = (origin) => {
+  if (!origin) return true;
+  const clean = origin.replace(/\/$/, "");
+  if (allowedOrigins.includes("*") || allowedOrigins.includes(clean)) return true;
+  if (/^https:\/\/.*\.vercel\.app$/.test(clean)) return true;
+  return false;
+};
+
 app.use(
   cors({
     origin: (origin, callback) => {
-      // Allow requests with no origin (curl, Postman, server-to-server)
-      if (!origin) return callback(null, true);
-      const cleanOrigin = origin.replace(/\/$/, "");
-      if (allowedOrigins.includes("*") || allowedOrigins.includes(cleanOrigin)) {
-        return callback(null, true);
-      }
+      if (isAllowedOrigin(origin)) return callback(null, true);
       callback(new Error(`CORS: origin '${origin}' is not allowed`));
     },
     credentials: true,
