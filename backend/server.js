@@ -28,16 +28,21 @@ const app = express();
 app.use(helmet());
 
 // ── Security: CORS ─────────────────────────────────────────────────────────
-const allowedOrigins = [
-  process.env.FRONTEND_URL || "http://localhost:5173",
-];
+const rawAllowedOrigins = process.env.FRONTEND_URL || "http://localhost:5173";
+const allowedOrigins = rawAllowedOrigins
+  .split(",")
+  .map((url) => url.trim().replace(/\/$/, ""))
+  .filter(Boolean);
 
 app.use(
   cors({
     origin: (origin, callback) => {
       // Allow requests with no origin (curl, Postman, server-to-server)
       if (!origin) return callback(null, true);
-      if (allowedOrigins.includes(origin)) return callback(null, true);
+      const cleanOrigin = origin.replace(/\/$/, "");
+      if (allowedOrigins.includes("*") || allowedOrigins.includes(cleanOrigin)) {
+        return callback(null, true);
+      }
       callback(new Error(`CORS: origin '${origin}' is not allowed`));
     },
     credentials: true,
@@ -83,6 +88,19 @@ app.get("/", (req, res) => {
 
 app.get("/api/", (req, res) => {
   res.json({ message: "Digital Certificate Verification API is running" });
+});
+
+// ── 404 & Centralized Error Handlers ───────────────────────────────────────
+app.use((req, res) => {
+  res.status(404).json({ message: `Route ${req.method} ${req.originalUrl} not found` });
+});
+
+app.use((err, req, res, next) => {
+  console.error("Unhandled server error:", err);
+  const status = err.status || 500;
+  res.status(status).json({
+    message: process.env.NODE_ENV === "production" ? "Internal server error" : err.message,
+  });
 });
 
 // ── Start server ───────────────────────────────────────────────────────────

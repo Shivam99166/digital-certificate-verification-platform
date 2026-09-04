@@ -1,0 +1,20 @@
+# Render Blueprint Specification
+# Docs: https://render.com/docs/blueprint-spec
+services:
+  - type: web
+    name: certvault-api
+    runtime: node
+    plan: free
+    rootDir: backend
+    buildCommand: npm install
+    startCommand: node server.js
+    healthCheckPath: /api/
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: MONGO_URI
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: FRONTEND_URL
+        sync: false
