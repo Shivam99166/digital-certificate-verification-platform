@@ -3,20 +3,28 @@ const { MongoMemoryServer } = require("mongodb-memory-server");
 const dns = require("dns").promises;
 const dnsBase = require("dns");
 
-// Use reliable public DNS servers for Atlas SRV resolution.
-dnsBase.setServers(["1.1.1.1", "8.8.8.8"]);
+// On Windows, local ISP resolvers often block Atlas SRV queries.
+// On Linux/Render containers, overriding setServers breaks container DNS routing,
+// so only configure public DNS servers on Windows or as an explicit fallback.
+if (process.platform === "win32") {
+  try {
+    dnsBase.setServers(["1.1.1.1", "8.8.8.8"]);
+  } catch (_) {}
+}
 
 const connectOptions = (uri) => ({
-  serverSelectionTimeoutMS: 5000,
-  connectTimeoutMS: 5000,
-  family: 4,
+  serverSelectionTimeoutMS: 30000,
+  connectTimeoutMS: 30000,
   tls: uri.startsWith("mongodb+srv://"),
 });
 
 const connectDB = async () => {
-  const atlasUri = process.env.MONGO_URI;
+  const rawAtlas = process.env.MONGO_URI;
+  const atlasUri = rawAtlas ? rawAtlas.trim().replace(/^["']|["']$/g, "") : undefined;
   const localUri = process.env.LOCAL_MONGO_URI || "mongodb://127.0.0.1:27017/digital_certificate";
   const useInMemoryFallback = process.env.USE_IN_MEMORY_DB === "true";
+  const isProduction = process.env.NODE_ENV === "production";
+
   const uri = atlasUri || localUri;
 
   if (!uri && !useInMemoryFallback) {
@@ -32,11 +40,15 @@ const connectDB = async () => {
     await tryConnect(uri);
     return;
   } catch (error) {
+    console.warn("Primary MongoDB connection attempt failed:", error.message);
+
     const shouldRetryWithHosts =
-      atlasUri && atlasUri.startsWith("mongodb+srv://") && /querySrv|ECONNREFUSED|ENOTFOUND/i.test(error.message);
+      atlasUri &&
+      atlasUri.startsWith("mongodb+srv://") &&
+      /querySrv|ECONNREFUSED|ENOTFOUND|timeout|whitelist/i.test(error.message);
 
     if (shouldRetryWithHosts) {
-      console.warn("MongoDB SRV resolution failed, retrying with explicit seed list...");
+      console.warn("Attempting fallback SRV resolution...");
       try {
         const fallbackUri = await buildFallbackUri(atlasUri);
         await tryConnect(fallbackUri);
@@ -46,8 +58,9 @@ const connectDB = async () => {
       }
     }
 
-    if (atlasUri && localUri && localUri !== atlasUri) {
-      console.warn("Primary MongoDB connection failed, attempting local database fallback...");
+    // Only attempt local database fallback in development
+    if (!isProduction && atlasUri && localUri && localUri !== atlasUri) {
+      console.warn("Attempting local database fallback (development only)...");
       try {
         await tryConnect(localUri);
         console.log("MongoDB connected successfully using LOCAL_MONGO_URI");
@@ -71,10 +84,6 @@ const connectDB = async () => {
     }
 
     console.error("MongoDB connection failed:", error.message);
-    console.error(
-      "If using MongoDB Atlas, allow your current IP in Network Access. If using local MongoDB, start the MongoDB service and confirm the LOCAL_MONGO_URI value."
-    );
-
     throw error;
   }
 };
@@ -82,6 +91,9 @@ const connectDB = async () => {
 const buildFallbackUri = async (uri) => {
   const parsed = new URL(uri);
   const host = parsed.hostname;
+  try {
+    dnsBase.setServers(["1.1.1.1", "8.8.8.8"]);
+  } catch (_) {}
   const srvRecords = await dns.resolveSrv(`_mongodb._tcp.${host}`);
   const hostList = srvRecords.map((record) => `${record.name}:${record.port}`).join(",");
 
